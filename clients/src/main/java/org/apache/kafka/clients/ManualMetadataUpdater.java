@@ -27,6 +27,8 @@ import java.util.List;
  * communication.
  *
  * This class is not thread-safe!
+ *
+ * Mock的一个集群元数据更新器，用于controller/broker的通信中。因为controller已经有了最新的元数据，不需要再获取了。
  */
 public class ManualMetadataUpdater implements MetadataUpdater {
 

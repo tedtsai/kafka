@@ -183,6 +183,7 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
       throw new StateChangeFailedException(("Controller %d epoch %d initiated state change for partition %s to %s failed because " +
                                             "the partition state machine has not started")
                                               .format(controllerId, controller.epoch, topicAndPartition, targetState))
+    // 分区当前状态
     val currState = partitionState.getOrElseUpdate(topicAndPartition, NonExistentPartition)
     try {
       targetState match {
@@ -203,7 +204,7 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
               initializeLeaderAndIsrForPartition(topicAndPartition)
             case OfflinePartition =>
               electLeaderForPartition(topic, partition, leaderSelector)
-            case OnlinePartition => // invoked when the leader needs to be re-elected
+            case OnlinePartition => // invoked when the leader needs to be re-elected  // 选举新leader
               electLeaderForPartition(topic, partition, leaderSelector)
             case _ => // should never come here since illegal previous states are checked above
           }
@@ -315,6 +316,8 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
   /**
    * Invoked on the OfflinePartition,OnlinePartition->OnlinePartition state change.
    * It invokes the leader election API to elect a leader for the input offline partition
+    * 进行leader选举并更新zk信息
+    *
    * @param topic               The topic of the offline partition
    * @param partition           The offline partition
    * @param leaderSelector      Specific leader selector (e.g., offline/reassigned/etc.)
@@ -327,12 +330,13 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
     try {
       var zookeeperPathUpdateSucceeded: Boolean = false
       var newLeaderAndIsr: LeaderAndIsr = null
-      var replicasForThisPartition: Seq[Int] = Seq.empty[Int]
+      var replicasForThisPartition: Seq[Int] = Seq.empty[Int]   //分区影响的节点
       while(!zookeeperPathUpdateSucceeded) {
+        // 读取zk中状态 /brokers/topics/[topicN]/partitions/[partitionN]/state
         val currentLeaderIsrAndEpoch = getLeaderIsrAndEpochOrThrowException(topic, partition)
         val currentLeaderAndIsr = currentLeaderIsrAndEpoch.leaderAndIsr
         val controllerEpoch = currentLeaderIsrAndEpoch.controllerEpoch
-        if (controllerEpoch > controller.epoch) {
+        if (controllerEpoch > controller.epoch) { // epoch 相当于一个版本控制 只有一个controller可能变更集群中的信息
           val failMsg = ("aborted leader election for partition [%s,%d] since the LeaderAndIsr path was " +
                          "already written by another controller. This probably means that the current controller %d went through " +
                          "a soft failure and another controller was elected with epoch %d.")
@@ -341,21 +345,24 @@ class PartitionStateMachine(controller: KafkaController) extends Logging {
           throw new StateChangeFailedException(failMsg)
         }
         // elect new leader or throw exception
+        // 选举leader与Isr
         val (leaderAndIsr, replicas) = leaderSelector.selectLeader(topicAndPartition, currentLeaderAndIsr)
+        // 更新zk中的信息 /brokers/topics/[topicN]/partitions/[partitionN]/state
         val (updateSucceeded, newVersion) = ReplicationUtils.updateLeaderAndIsr(zkUtils, topic, partition,
           leaderAndIsr, controller.epoch, currentLeaderAndIsr.zkVersion)
+
         newLeaderAndIsr = leaderAndIsr
         newLeaderAndIsr.zkVersion = newVersion
         zookeeperPathUpdateSucceeded = updateSucceeded
         replicasForThisPartition = replicas
       }
       val newLeaderIsrAndControllerEpoch = new LeaderIsrAndControllerEpoch(newLeaderAndIsr, controller.epoch)
-      // update the leader cache
+      // update the leader cache 更新 Controller 缓存 为leader变更之后的信息
       controllerContext.partitionLeadershipInfo.put(TopicAndPartition(topic, partition), newLeaderIsrAndControllerEpoch)
       stateChangeLogger.trace("Controller %d epoch %d elected leader %d for Offline partition %s"
                                 .format(controllerId, controller.epoch, newLeaderAndIsr.leader, topicAndPartition))
       val replicas = controllerContext.partitionReplicaAssignment(TopicAndPartition(topic, partition))
-      // store new leader and isr info in cache
+      // store new leader and isr info in cache 发送 UpdateMetadataRequest 所影响的partition所在的节点
       brokerRequestBatch.addLeaderAndIsrRequestForBrokers(replicasForThisPartition, topic, partition,
         newLeaderIsrAndControllerEpoch, replicas)
     } catch {

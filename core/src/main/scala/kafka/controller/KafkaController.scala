@@ -164,6 +164,7 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
   val controllerContext = new ControllerContext(zkUtils, config.zkSessionTimeoutMs)
   val partitionStateMachine = new PartitionStateMachine(this)
   val replicaStateMachine = new ReplicaStateMachine(this)
+  //  监听zk /controller节点，进行controller选举
   private val controllerElector = new ZookeeperLeaderElector(controllerContext, ZkUtils.ControllerPath, onControllerFailover,
     onControllerResignation, config.brokerId)
   // have a separate scheduler for the controller to be able to start and stop independently of the
@@ -243,6 +244,7 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
       info("Shutting down broker " + id)
 
       inLock(controllerContext.controllerLock) {
+        // 如果当前节点已经关闭，直接抛出异常
         if (!controllerContext.liveOrShuttingDownBrokerIds.contains(id))
           throw new BrokerNotAvailableException("Broker id %d does not exist.".format(id))
 
@@ -251,21 +253,26 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
         debug("Live brokers: " + controllerContext.liveBrokerIds.mkString(","))
       }
 
+      // 确定这个节点对应的分区 副本个数
       val allPartitionsAndReplicationFactorOnBroker: Set[(TopicAndPartition, Int)] =
         inLock(controllerContext.controllerLock) {
           controllerContext.partitionsOnBroker(id)
             .map(topicAndPartition => (topicAndPartition, controllerContext.partitionReplicaAssignment(topicAndPartition).size))
         }
 
+      // 遍历每个分区，变更影响的分区的leader副本到其他的节点
       allPartitionsAndReplicationFactorOnBroker.foreach {
         case(topicAndPartition, replicationFactor) =>
           // Move leadership serially to relinquish lock.
           inLock(controllerContext.controllerLock) {
             controllerContext.partitionLeadershipInfo.get(topicAndPartition).foreach { currLeaderIsrAndControllerEpoch =>
-              if (replicationFactor > 1) {
+              if (replicationFactor > 1) { // 只是当前分区的Isr大于1时，才能进行新的leader的选举
                 if (currLeaderIsrAndControllerEpoch.leaderAndIsr.leader == id) {
+                  // 如果循环中的分区的主副本与关机Node的Id相同，进行新选举过程，变更leader、更新isr,zk,通知其他的所有在线节点
                   // If the broker leads the topic partition, transition the leader and update isr. Updates zk and
                   // notifies all affected brokers
+
+                  // controlledShutdownPartitionLeaderSelector 从当前Isr中选举一个replica作为leader
                   partitionStateMachine.handleStateChanges(Set(topicAndPartition), OnlinePartition,
                     controlledShutdownPartitionLeaderSelector)
                 } else {
@@ -818,7 +825,9 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
   }
 
   private def startChannelManager() {
+    // 实例化 controller到其他节点的连接管理器
     controllerContext.controllerChannelManager = new ControllerChannelManager(controllerContext, config, time, metrics, threadNamePrefix)
+    // 启动连接发送线程
     controllerContext.controllerChannelManager.startup()
   }
 

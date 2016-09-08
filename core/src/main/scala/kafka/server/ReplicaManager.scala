@@ -600,6 +600,7 @@ class ReplicaManager(val config: KafkaConfig,
     }
     replicaStateChangeLock synchronized {
       val responseMap = new mutable.HashMap[TopicPartition, Short]
+      // epoch 比当前的小，接收到这次请求之前 已经有过更新了
       if (leaderAndISRRequest.controllerEpoch < controllerEpoch) {
         leaderAndISRRequest.partitionStates.asScala.foreach { case (topicPartition, stateInfo) =>
         stateChangeLogger.warn(("Broker %d ignoring LeaderAndIsr request from controller %d with correlation id %d since " +
@@ -620,7 +621,7 @@ class ReplicaManager(val config: KafkaConfig,
           // This is useful while updating the isr to maintain the decision maker controller's epoch in the zookeeper path
           if (partitionLeaderEpoch < stateInfo.leaderEpoch) {
             if(stateInfo.replicas.contains(config.brokerId))
-              partitionState.put(partition, stateInfo)
+              partitionState.put(partition, stateInfo)  // 记录要更新的分区
             else {
               stateChangeLogger.warn(("Broker %d ignoring LeaderAndIsr request from controller %d with correlation id %d " +
                 "epoch %d for partition [%s,%d] as itself is not in assigned replica list %s")
@@ -638,6 +639,7 @@ class ReplicaManager(val config: KafkaConfig,
           }
         }
 
+        //过滤出leader分区
         val partitionsTobeLeader = partitionState.filter { case (partition, stateInfo) =>
           stateInfo.leader == config.brokerId
         }
@@ -658,15 +660,19 @@ class ReplicaManager(val config: KafkaConfig,
           startHighWaterMarksCheckPointThread()
           hwThreadInitialized = true
         }
+        // 移除无效Fetcher线程
         replicaFetcherManager.shutdownIdleFetcherThreads()
 
+        // 触发leader变更事件
         onLeadershipChange(partitionsBecomeLeader, partitionsBecomeFollower)
+        // 返回LeaderIsr变更后的响应给 controller
         BecomeLeaderOrFollowerResult(responseMap, Errors.NONE.code)
       }
     }
   }
 
   /*
+   *
    * Make the current broker to become leader for a given set of partitions by:
    *
    * 1. Stop fetchers for these partitions
@@ -696,9 +702,11 @@ class ReplicaManager(val config: KafkaConfig,
 
     try {
       // First stop fetchers for all the partitions
+      // 移除 副本的 Fetcher 线程，变成leader了，不需要同步
       replicaFetcherManager.removeFetcherForPartitions(partitionState.keySet.map(new TopicAndPartition(_)))
       // Update the partition information to be the leader
       partitionState.foreach{ case (partition, partitionStateInfo) =>
+        // 本地分区转变成Leader
         if (partition.makeLeader(controllerId, partitionStateInfo, correlationId))
           partitionsToMakeLeaders += partition
         else

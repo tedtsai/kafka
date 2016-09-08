@@ -144,13 +144,16 @@ class KafkaApis(val requestChannel: RequestChannel,
       val responseHeader = new ResponseHeader(correlationId)
       val leaderAndIsrResponse =
         if (authorize(request.session, ClusterAction, Resource.ClusterResource)) {
+          //处理controller发送的更新请求 这个节点可能变更成 Leader or Follower，变更后会触发 onLeadershipChange回调，进而改变消费者的状态
           val result = replicaManager.becomeLeaderOrFollower(correlationId, leaderAndIsrRequest, metadataCache, onLeadershipChange)
           new LeaderAndIsrResponse(result.errorCode, result.responseMap.mapValues(new JShort(_)).asJava)
         } else {
+          // 无效请求
           val result = leaderAndIsrRequest.partitionStates.asScala.keys.map((_, new JShort(Errors.CLUSTER_AUTHORIZATION_FAILED.code))).toMap
           new LeaderAndIsrResponse(Errors.CLUSTER_AUTHORIZATION_FAILED.code, result.asJava)
         }
 
+      // 返回响应给controller
       requestChannel.sendResponse(new Response(request, new ResponseSend(request.connectionId, responseHeader, leaderAndIsrResponse)))
     } catch {
       case e: KafkaStorageException =>

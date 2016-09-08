@@ -37,11 +37,22 @@ import scala.collection.JavaConverters._
 import scala.collection.{Set, mutable}
 import scala.collection.mutable.HashMap
 
+/**
+  * controller到broker连接管理器
+  * 所有与broker的通信都这通过这个管理器进行。
+  *
+  * @param controllerContext
+  * @param config
+  * @param time
+  * @param metrics
+  * @param threadNamePrefix
+  */
 class ControllerChannelManager(controllerContext: ControllerContext, config: KafkaConfig, time: Time, metrics: Metrics, threadNamePrefix: Option[String] = None) extends Logging {
   protected val brokerStateInfo = new HashMap[Int, ControllerBrokerStateInfo]
   private val brokerLock = new Object
   this.logIdent = "[Channel manager on controller " + config.brokerId + "]: "
 
+  // 启动时，将controller到线上节点的客户端连接初始好
   controllerContext.liveBrokers.foreach(addNewBroker(_))
 
   def startup() = {
@@ -58,6 +69,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
 
   def sendRequest(brokerId: Int, apiKey: ApiKeys, apiVersion: Option[Short], request: AbstractRequest, callback: AbstractRequestResponse => Unit = null) {
     brokerLock synchronized {
+      // 通过brokerId 查找到controller中broker的对应的连接客户端信息
       val stateInfoOpt = brokerStateInfo.get(brokerId)
       stateInfoOpt match {
         case Some(stateInfo) =>
@@ -68,12 +80,18 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
     }
   }
 
+  /**
+    * zookeeper上broker节点信息变更 后会回调此方法，controller中保存新加入节点信息。
+    * 初始化 controller向新节点的连接与RPC发送线程。
+    *
+    * @param broker
+    */
   def addBroker(broker: Broker) {
     // be careful here. Maybe the startup() API has already started the request send thread
     brokerLock synchronized {
       if(!brokerStateInfo.contains(broker.id)) {
-        addNewBroker(broker)
-        startRequestSendThread(broker.id)
+        addNewBroker(broker)  // 初始化controller到 broker的连接与线程
+        startRequestSendThread(broker.id) // 开启请求发送线程
       }
     }
   }
@@ -89,6 +107,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
     debug("Controller %d trying to connect to broker %d".format(config.brokerId, broker.id))
     val brokerEndPoint = broker.getBrokerEndPoint(config.interBrokerSecurityProtocol)
     val brokerNode = new Node(broker.id, brokerEndPoint.host, brokerEndPoint.port)
+
     val networkClient = {
       val channelBuilder = ChannelBuilders.create(
         config.interBrokerSecurityProtocol,
@@ -128,6 +147,7 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
     val requestThread = new RequestSendThread(config.brokerId, controllerContext, messageQueue, networkClient,
       brokerNode, config, time, threadName)
     requestThread.setDaemon(false)
+    // 每个节点对应一个客户端
     brokerStateInfo.put(broker.id, new ControllerBrokerStateInfo(networkClient, brokerNode, messageQueue, requestThread))
   }
 
@@ -149,13 +169,15 @@ class ControllerChannelManager(controllerContext: ControllerContext, config: Kaf
   }
 }
 
+//异步发送的对象
 case class QueueItem(apiKey: ApiKeys, apiVersion: Option[Short], request: AbstractRequest, callback: AbstractRequestResponse => Unit)
 
+// controller 向其他节点发RPC的客户端线程
 class RequestSendThread(val controllerId: Int,
                         val controllerContext: ControllerContext,
-                        val queue: BlockingQueue[QueueItem],
-                        val networkClient: NetworkClient,
-                        val brokerNode: Node,
+                        val queue: BlockingQueue[QueueItem], //发送队列，有变更后异步发送
+                        val networkClient: NetworkClient,  //客户端
+                        val brokerNode: Node,               // 节点信息
                         val config: KafkaConfig,
                         val time: Time,
                         name: String)
@@ -366,6 +388,8 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
           topicPartition -> partitionState
         }
         val leaderAndIsrRequest = new LeaderAndIsrRequest(controllerId, controllerEpoch, partitionStates.asJava, leaders.asJava)
+
+        // 向controller中对应broker的客户端 ControllerBrokerStateInfo 异步发送请求
         controller.sendRequest(broker, ApiKeys.LEADER_AND_ISR, None, leaderAndIsrRequest, null)
       }
       leaderAndIsrRequestMap.clear()
@@ -439,10 +463,11 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
   }
 }
 
-case class ControllerBrokerStateInfo(networkClient: NetworkClient,
-                                     brokerNode: Node,
-                                     messageQueue: BlockingQueue[QueueItem],
-                                     requestSendThread: RequestSendThread)
+  // controller上维护的对其他节点的连接与发送请求的线程
+case class ControllerBrokerStateInfo(networkClient: NetworkClient,  // 连接客户端
+                                     brokerNode: Node,               // 节点信息
+                                     messageQueue: BlockingQueue[QueueItem], // 发送队列
+                                     requestSendThread: RequestSendThread)   // 发送线程
 
 case class StopReplicaRequestInfo(replica: PartitionAndReplica, deletePartition: Boolean, callback: AbstractRequestResponse => Unit = null)
 
