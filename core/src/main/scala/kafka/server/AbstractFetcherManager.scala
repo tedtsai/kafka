@@ -27,10 +27,11 @@ import kafka.common.TopicAndPartition
 import com.yammer.metrics.core.Gauge
 import org.apache.kafka.common.utils.Utils
 
+// fetcher的抽象实现，具体实现有ConsumerFetcher ReplicaFetcher
 abstract class AbstractFetcherManager(protected val name: String, clientId: String, numFetchers: Int = 1)
   extends Logging with KafkaMetricsGroup {
   // map of (source broker_id, fetcher_id per source broker) => fetcher
-  private val fetcherThreadMap = new mutable.HashMap[BrokerAndFetcherId, AbstractFetcherThread]
+  private val fetcherThreadMap = new mutable.HashMap[BrokerAndFetcherId, AbstractFetcherThread]  // 每个broker一个thread
   private val mapLock = new Object
   this.logIdent = "[" + name + "] "
 

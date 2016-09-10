@@ -48,6 +48,7 @@ import scala.collection._
 import scala.collection.JavaConverters._
 
 /**
+ * broker业务逻辑入口
  * Logic to handle the various Kafka requests
  */
 class KafkaApis(val requestChannel: RequestChannel,
@@ -514,6 +515,7 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   /**
+    * replica fetcher或 Consumer会去发送LIST_OFFSETS请求查询offset
    * Handle an offset request
    */
   def handleOffsetRequest(request: RequestChannel.Request) {

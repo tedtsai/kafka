@@ -26,6 +26,7 @@ import org.apache.kafka.common.utils.Utils
 
 import scala.collection.JavaConversions._
 
+// 启动程序  核心初始化见 KafkaServer
 object Kafka extends Logging {
 
   def getPropsFromArgs(args: Array[String]): Properties = {

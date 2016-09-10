@@ -307,6 +307,7 @@ class Partition(val topic: String,
         // keep the current immutable replica list reference
         val curInSyncReplicas = inSyncReplicas
 
+        // 所有Isr offset 都大于 requiredOffset时
         def numAcks = curInSyncReplicas.count { r =>
           if (!r.isLocal)
             if (r.logEndOffset.messageOffset >= requiredOffset) {
@@ -323,11 +324,13 @@ class Partition(val topic: String,
 
         val minIsr = leaderReplica.log.get.config.minInSyncReplicas
 
+        // 当前的hw大于 目标offset
         if (leaderReplica.highWatermark.messageOffset >= requiredOffset) {
           /*
            * The topic may be configured not to accept messages if there are not enough replicas in ISR
            * in this scenario the request was already appended locally and then added to the purgatory before the ISR was shrunk
            */
+          // 当前同步的replica大于最少同步时，可以返回响应了，否则还没同步完
           if (minIsr <= curInSyncReplicas.size)
             (true, Errors.NONE)
           else

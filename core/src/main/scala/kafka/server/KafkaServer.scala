@@ -111,14 +111,14 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
 
   val brokerState: BrokerState = new BrokerState
 
-  var apis: KafkaApis = null
-  var authorizer: Option[Authorizer] = None
-  var socketServer: SocketServer = null
-  var requestHandlerPool: KafkaRequestHandlerPool = null
+  var apis: KafkaApis = null                  // RPC处理API
+  var authorizer: Option[Authorizer] = None   // 权限认证
+  var socketServer: SocketServer = null       // 网络IO处理
+  var requestHandlerPool: KafkaRequestHandlerPool = null  // 异步处理Request的KafkaRequestHandler线程池
 
-  var logManager: LogManager = null
+  var logManager: LogManager = null // log子系统
 
-  var replicaManager: ReplicaManager = null
+  var replicaManager: ReplicaManager = null       //副本子系统
   var adminManager: AdminManager = null
 
   var dynamicConfigHandlers: Map[String, ConfigHandler] = null
@@ -126,9 +126,9 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
 
   var groupCoordinator: GroupCoordinator = null
 
-  var kafkaController: KafkaController = null
+  var kafkaController: KafkaController = null    //中控
 
-  val kafkaScheduler = new KafkaScheduler(config.backgroundThreads)
+  val kafkaScheduler = new KafkaScheduler(config.backgroundThreads)  //异步线程池，处理所有kafka的后台任务
 
   var kafkaHealthcheck: KafkaHealthcheck = null
   var metadataCache: MetadataCache = null
@@ -155,6 +155,18 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
   )
 
   /**
+    * 启动流程：
+    * 1. 启动后台任务线程池，处理所有kafka的后台任务
+    * 2. 启动zookeeper连接，处理集群信息存取
+    * 3. 启动logManager子系统,接收日志读书
+    * 4. 初始化MetadataCache
+    * 5. 启动 SocketServer 接收IO处理
+    * 6. 启动 replicaManager 处理Isr, 节点启动与停机
+    * 6. 启动 KafkaController 集群管理
+    * 6. 启动 adminManager 处理topic等的创建等管理
+    * 6. 启动 GroupCoordinator 管理消费者组
+    *
+    *
    * Start up API for bringing up a single instance of the Kafka server.
    * Instantiates the LogManager, the SocketServer and the request handlers - KafkaRequestHandlers
    */

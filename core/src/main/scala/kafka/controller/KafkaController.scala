@@ -313,17 +313,20 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
   }
 
   /**
+    * controller 选举成功后回调 将当前节点转变成Controller,
    * This callback is invoked by the zookeeper leader elector on electing the current broker as the new controller.
    * It does the following things on the become-controller state change -
-   * 1. Register controller epoch changed listener
-   * 2. Increments the controller epoch
+   * 1. Register controller epoch changed listener 注册/controller节点监听
+   * 2. Increments the controller epoch   增加 controller epoch
    * 3. Initializes the controller's context object that holds cache objects for current topics, live brokers and
-   *    leaders for all existing partitions.
-   * 4. Starts the controller's channel manager
-   * 5. Starts the replica state machine
-   * 6. Starts the partition state machine
+   *    leaders for all existing partitions. 初始化controllerContext
+   * 4. Starts the controller's channel manager 启动controller到broker的客户端连接
+   * 5. Starts the replica state machine  启动 副本状态机
+   * 6. Starts the partition state machine 启动分区状态
    * If it encounters any unexpected exception/error while becoming controller, it resigns as the current controller.
    * This ensures another controller election will be triggered and there will always be an actively serving controller
+    *
+    * 在以上任何一步出现异常后放弃成为controller，删除/controller节点，再次选举  这是在ZookeeperLeaderElector中try异常后做的
    */
   def onControllerFailover() {
     if(isRunning) {
@@ -333,11 +336,11 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
       // increment the controller epoch
       incrementControllerEpoch(zkUtils.zkClient)
       // before reading source of truth from zookeeper, register the listeners to get broker/topic callbacks
-      registerReassignedPartitionsListener()
-      registerIsrChangeNotificationListener()
-      registerPreferredReplicaElectionListener()
-      partitionStateMachine.registerListeners()
-      replicaStateMachine.registerListeners()
+      registerReassignedPartitionsListener()  // 监听 /admin/reassign_partitions ，由控制台命令触发
+      registerIsrChangeNotificationListener()  // 监听 /isr_change_notification    // 定时触发  maybePropagateIsrChanges
+      registerPreferredReplicaElectionListener() // 监听 /admin/preferred_replica_election
+      partitionStateMachine.registerListeners()  // 监听 /brokers/topics 触发partition状态的转换
+      replicaStateMachine.registerListeners()    // 监听 /brokers/ids   触发broker状态的转换，即 replica变更事件
       initializeControllerContext()
       replicaStateMachine.startup()
       partitionStateMachine.startup()
@@ -363,6 +366,8 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
   /**
    * This callback is invoked by the zookeeper leader elector when the current broker resigns as the controller. This is
    * required to clean up internal controller data structures
+    *
+    * controller 放弃 controller角色
    */
   def onControllerResignation() {
     debug("Controller resigning, broker id %d".format(config.brokerId))
@@ -410,6 +415,8 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
   }
 
   /**
+    *
+    * BrokerChangeListener 中触发，新上线的broker做为输入。
    * This callback is invoked by the replica state machine's broker change listener, with the list of newly started
    * brokers as input. It does the following -
    * 1. Sends update metadata request to all live and shutting down brokers
@@ -430,6 +437,8 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
     // broker via this update.
     // In cases of controlled shutdown leaders will not be elected when a new broker comes up. So at least in the
     // common controlled shutdown case, the metadata will reach the new brokers faster
+
+    // 将新启动的broker 元数据发送到其他的在线或正在关机的broker
     sendUpdateMetadataRequest(controllerContext.liveOrShuttingDownBrokerIds.toSeq)
     // the very first thing to do when a new broker comes up is send it the entire list of partitions that it is
     // supposed to host. Based on that the broker starts the high watermark threads for the input list of partitions
@@ -455,6 +464,8 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
   }
 
   /**
+    * BrokerChangeListener 中触发，下线的broker做为输入。
+    *
    * This callback is invoked by the replica state machine's broker change listener with the list of failed brokers
    * as input. It does the following -
    * 1. Mark partitions with dead leaders as offline

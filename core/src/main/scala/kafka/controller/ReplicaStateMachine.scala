@@ -346,6 +346,7 @@ class ReplicaStateMachine(controller: KafkaController) extends Logging {
   }
 
   /**
+    * 监听 /brokers/ids 下节点数据变化。 当有broker节点上线或下线时，被触发
    * This is the zookeeper listener that triggers all the state transitions for a replica
    */
   class BrokerChangeListener() extends IZkChildListener with Logging {
@@ -356,6 +357,7 @@ class ReplicaStateMachine(controller: KafkaController) extends Logging {
         if (hasStarted.get) {
           ControllerStats.leaderElectionTimer.time {
             try {
+              // 计算出新启动的与下线的节点，分别触发 onBrokerStartup，onBrokerFailure
               val curBrokers = currentBrokerList.map(_.toInt).toSet.flatMap(zkUtils.getBrokerInfo)
               val curBrokerIds = curBrokers.map(_.id)
               val liveOrShuttingDownBrokerIds = controllerContext.liveOrShuttingDownBrokerIds

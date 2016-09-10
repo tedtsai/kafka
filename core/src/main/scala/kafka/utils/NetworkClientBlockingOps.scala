@@ -132,6 +132,7 @@ class NetworkClientBlockingOps(val client: NetworkClient) extends AnyVal {
 
     @tailrec
     def recursivePoll: T = {
+      // 通过超时来死循环
       // rely on request timeout to ensure we don't block forever
       val responses = client.poll(Long.MaxValue, time.milliseconds()).asScala
       collect(responses) match {

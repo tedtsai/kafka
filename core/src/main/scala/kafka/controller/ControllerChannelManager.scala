@@ -321,6 +321,7 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
     }
   }
 
+  // 发送 UpdateMetadataRequest到队列中
   /** Send UpdateMetadataRequest to the given brokers for the given partitions and partitions that are being deleted */
   def addUpdateMetadataRequestForBrokers(brokerIds: Seq[Int],
                                          partitions: collection.Set[TopicAndPartition] = Set.empty[TopicAndPartition],
@@ -357,6 +358,7 @@ class ControllerBrokerRequestBatch(controller: KafkaController) extends  Logging
     }
     if (filteredPartitions.isEmpty)
       brokerIds.filter(b => b >= 0).foreach { brokerId =>
+        // 初始化每个对broker对应的发送map
         updateMetadataRequestMap.getOrElseUpdate(brokerId, mutable.Map.empty[TopicPartition, PartitionStateInfo])
       }
     else

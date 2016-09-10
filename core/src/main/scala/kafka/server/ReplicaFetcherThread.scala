@@ -117,15 +117,18 @@ class ReplicaFetcherThread(name: String,
       val messageSet = partitionData.toByteBufferMessageSet
       warnIfMessageOversized(messageSet, topicAndPartition)
 
+      // 请求的offset 与 当前副本的最新offset不同时抛出异常
       if (fetchOffset != replica.logEndOffset.messageOffset)
         throw new RuntimeException("Offset mismatch for partition %s: fetched offset = %d, log end offset = %d.".format(topicAndPartition, fetchOffset, replica.logEndOffset.messageOffset))
       if (logger.isTraceEnabled)
         trace("Follower %d has replica log end offset %d for partition %s. Received %d messages and leader hw %d"
           .format(replica.brokerId, replica.logEndOffset.messageOffset, topicAndPartition, messageSet.sizeInBytes, partitionData.highWatermark))
+      //写入日志文件,而且不用分配offset
       replica.log.get.append(messageSet, assignOffsets = false)
       if (logger.isTraceEnabled)
         trace("Follower %d has replica log end offset %d after appending %d bytes of messages for partition %s"
           .format(replica.brokerId, replica.logEndOffset.messageOffset, messageSet.sizeInBytes, topicAndPartition))
+      // leader同步更新hw到slave
       val followerHighWatermark = replica.logEndOffset.messageOffset.min(partitionData.highWatermark)
       // for the follower replica, we do not need to keep
       // its segment base offset the physical position,
@@ -156,6 +159,9 @@ class ReplicaFetcherThread(name: String,
     val replica = replicaMgr.getReplica(topicAndPartition.topic, topicAndPartition.partition).get
 
     /**
+      * 当一个follower下线了，而leader一直在写入日志。过了一会这个下线的follower又上线了，而所有的ISR节点全部下线。
+      * 这时最初这个没有安全同步的follower选举成了leader，并且接收生产者的请求。之后原来ISR中的某个节点上线，从新的Leader上同步数据时
+      * 会出现out of range的情况，这时会将新上线的日志截断，产生数据丢失了。·
      * Unclean leader election: A follower goes down, in the meanwhile the leader keeps appending messages. The follower comes back up
      * and before it has completely caught up with the leader's logs, all replicas in the ISR go down. The follower is now uncleanly
      * elected as the new leader, and it starts appending messages from the client. The old leader comes back up, becomes a follower
@@ -165,9 +171,11 @@ class ReplicaFetcherThread(name: String,
      *
      * There is a potential for a mismatch between the logs of the two replicas here. We don't fix this mismatch as of now.
      */
+       // 发送ListOffsetRequest查询是新offset
     val leaderEndOffset: Long = earliestOrLatestOffset(topicAndPartition, ListOffsetRequest.LATEST_TIMESTAMP,
       brokerConfig.brokerId)
 
+    // 最近的offset与当前replica的offset要小，需要进行日志truncate
     if (leaderEndOffset < replica.logEndOffset.messageOffset) {
       // Prior to truncating the follower's log, ensure that doing so is not disallowed by the configuration for unclean leader election.
       // This situation could only happen if the unclean election configuration for a topic changes while a replica is down. Otherwise,
@@ -208,6 +216,8 @@ class ReplicaFetcherThread(name: String,
        * and the current leader's log start offset.
        *
        */
+
+        // ???不太明白 TODO
       val leaderStartOffset: Long = earliestOrLatestOffset(topicAndPartition, ListOffsetRequest.EARLIEST_TIMESTAMP,
         brokerConfig.brokerId)
       warn("Replica %d for partition %s reset its fetch offset from %d to current leader %d's start offset %d"
@@ -252,6 +262,8 @@ class ReplicaFetcherThread(name: String,
 
   }
 
+
+  // 获取最新的offset
   private def earliestOrLatestOffset(topicAndPartition: TopicAndPartition, earliestOrLatest: Long, consumerId: Int): Long = {
     val topicPartition = new TopicPartition(topicAndPartition.topic, topicAndPartition.partition)
     val partitions = Map(

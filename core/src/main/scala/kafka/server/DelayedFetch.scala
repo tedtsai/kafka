@@ -48,6 +48,7 @@ case class FetchMetadata(fetchMinBytes: Int,
                           "partitionStatus: " + fetchPartitionStatus + "]"
 }
 /**
+  * 处理
  * A delayed fetch operation that can be created by the replica manager and watched
  * in the fetch operation purgatory
  */

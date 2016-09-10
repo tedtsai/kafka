@@ -81,6 +81,7 @@ class ClientQuotaManager(private val config: ClientQuotaManagerConfig,
                                       "Tracks the size of the delay queue"), new Total())
 
   /**
+    * 触发delay 请求响应的线程
    * Reaper thread that triggers callbacks on all throttled requests
    * @param delayQueue DelayQueue to dequeue from
    */
@@ -88,6 +89,7 @@ class ClientQuotaManager(private val config: ClientQuotaManagerConfig,
     "ThrottledRequestReaper-%s".format(apiKey), false) {
 
     override def doWork(): Unit = {
+      // delayQueue无任务在当前timeout内要触发时，返回的是null
       val response: ThrottledResponse = delayQueue.poll(1, TimeUnit.SECONDS)
       if (response != null) {
         // Decrement the size of the delay queue
@@ -111,6 +113,7 @@ class ClientQuotaManager(private val config: ClientQuotaManagerConfig,
     val clientSensors = getOrCreateQuotaSensors(clientId)
     var throttleTimeMs = 0
     try {
+      // 不满足限流就会抛出异常
       clientSensors.quotaSensor.record(value)
       // trigger the callback immediately if quota is not violated
       callback(0)

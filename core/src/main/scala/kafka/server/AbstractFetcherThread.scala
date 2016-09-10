@@ -104,6 +104,7 @@ abstract class AbstractFetcherThread(name: String,
 
     try {
       trace("Issuing to broker %d of fetch request %s".format(sourceBroker.id, fetchRequest))
+      // 发送获取请求
       responseData = fetch(fetchRequest)
     } catch {
       case t: Throwable =>
@@ -119,24 +120,27 @@ abstract class AbstractFetcherThread(name: String,
     fetcherStats.requestRate.mark()
 
     if (responseData.nonEmpty) {
-      // process fetched data
+      // process fetched data  处理返回数据
       inLock(partitionMapLock) {
 
+        // 对于返回数据的每一个topic-partition，处理patitionData写入到本地日志文件中
         responseData.foreach { case (topicAndPartition, partitionData) =>
           val TopicAndPartition(topic, partitionId) = topicAndPartition
           partitionMap.get(topicAndPartition).foreach(currentPartitionFetchState =>
             // we append to the log if the current offset is defined and it is the same as the offset requested during fetch
+            // 发起请求的offset与当前offset相同
             if (fetchRequest.offset(topicAndPartition) == currentPartitionFetchState.offset) {
               Errors.forCode(partitionData.errorCode) match {
                 case Errors.NONE =>
                   try {
+                    // 返回无错误，计算最后一条日志的offset，作为新的offset
                     val messages = partitionData.toByteBufferMessageSet
                     val validBytes = messages.validBytes
                     val newOffset = messages.shallowIterator.toSeq.lastOption match {
                       case Some(m: MessageAndOffset) => m.nextOffset
                       case None => currentPartitionFetchState.offset
                     }
-                    partitionMap.put(topicAndPartition, new PartitionFetchState(newOffset))
+                    partitionMap.put(topicAndPartition, new PartitionFetchState(newOffset))  // 记录新的offset
                     fetcherLagStats.getAndMaybePut(topic, partitionId).lag = Math.max(0L, partitionData.highWatermark - newOffset)
                     fetcherStats.byteRate.mark(validBytes)
                     // Once we hand off the partition data to the subclass, we can't mess with it any more in this thread

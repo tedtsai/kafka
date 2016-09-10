@@ -45,6 +45,7 @@ import scala.collection.JavaConverters._
 
 /*
  * Result metadata of a log append operation on the log
+ * Log写入后的meta数据，返回给客户端
  */
 case class LogAppendResult(info: LogAppendInfo, error: Option[Throwable] = None) {
   def errorCode = error match {
@@ -54,6 +55,7 @@ case class LogAppendResult(info: LogAppendInfo, error: Option[Throwable] = None)
 }
 
 /*
+ * 日志读取结果
  * Result metadata of a log read operation on the log
  * @param info @FetchDataInfo returned by the @Log read
  * @param hw high watermark of the local replica
@@ -112,13 +114,16 @@ class ReplicaManager(val config: KafkaConfig,
   /* epoch of the controller that last changed the leader */
   @volatile var controllerEpoch: Int = KafkaController.InitialControllerEpoch - 1
   private val localBrokerId = config.brokerId
+  // topic-partition -> Partition的池
   private val allPartitions = new Pool[(String, Int), Partition](valueFactory = Some { case (t, p) =>
     new Partition(t, p, time, this)
   })
   private val replicaStateChangeLock = new Object
   val replicaFetcherManager = new ReplicaFetcherManager(config, this, metrics, jTime, threadNamePrefix)
   private val highWatermarkCheckPointThreadStarted = new AtomicBoolean(false)
-  val highWatermarkCheckpoints = config.logDirs.map(dir => (new File(dir).getAbsolutePath, new OffsetCheckpoint(new File(dir, ReplicaManager.HighWatermarkFilename)))).toMap
+  // 每一个partition一个HW checkpoint
+  val highWatermarkCheckpoints = config.logDirs.map(dir => (new File(dir).getAbsolutePath,
+    new OffsetCheckpoint(new File(dir, ReplicaManager.HighWatermarkFilename)))).toMap
   private var hwThreadInitialized = false
   this.logIdent = "[Replica Manager on Broker " + localBrokerId + "]: "
   val stateChangeLogger = KafkaController.stateChangeLogger
@@ -260,10 +265,13 @@ class ReplicaManager(val config: KafkaConfig,
           .format(localBrokerId, stopReplicaRequest.controllerEpoch, controllerEpoch))
         (responseMap, Errors.STALE_CONTROLLER_EPOCH.code)
       } else {
+
         val partitions = stopReplicaRequest.partitions.asScala
         controllerEpoch = stopReplicaRequest.controllerEpoch
         // First stop fetchers for all partitions, then stop the corresponding replicas
+        // 停止所有分区的fetcher线程
         replicaFetcherManager.removeFetcherForPartitions(partitions.map(r => TopicAndPartition(r.topic, r.partition)))
+        // 停止所有分区
         for(topicPartition <- partitions){
           val errorCode = stopReplica(topicPartition.topic, topicPartition.partition, stopReplicaRequest.deletePartitions)
           responseMap.put(topicPartition, errorCode)
@@ -887,6 +895,7 @@ class ReplicaManager(val config: KafkaConfig,
     allPartitions.values.filter(_.leaderReplicaIfLocal().isDefined).toList
   }
 
+  // 定时任务flush hw到文件
   // Flushes the highwatermark value for all partitions to the highwatermark file
   def checkpointHighWatermarks() {
     val replicas = allPartitions.values.flatMap(_.getReplica(config.brokerId))
